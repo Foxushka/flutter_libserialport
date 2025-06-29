@@ -298,16 +298,21 @@ static void get_usb_details(struct sp_port *port, DEVINST dev_inst_match)
 	HDEVINFO device_info;
 	SP_DEVINFO_DATA device_info_data;
 	ULONG i, size = 0;
+	BOOL device_found = FALSE;
 
 	device_info = SetupDiGetClassDevs(&GUID_CLASS_USB_HOST_CONTROLLER, NULL, NULL,
 	                                  DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
 	device_info_data.cbSize = sizeof(device_info_data);
 
-	for (i = 0; SetupDiEnumDeviceInfo(device_info, i, &device_info_data); i++) {
+	for (i = 0; SetupDiEnumDeviceInfo(device_info, i, &device_info_data) && !device_found; i++) {
 		SP_DEVICE_INTERFACE_DATA device_interface_data;
 		PSP_DEVICE_INTERFACE_DETAIL_DATA device_detail_data;
-		DEVINST dev_inst = dev_inst_match;
 		HANDLE host_controller_device;
+		char controller_desc[256] = "Unknown";
+		DWORD desc_size = sizeof(controller_desc);
+
+		CM_Get_DevNode_Registry_PropertyA(device_info_data.DevInst, CM_DRP_DEVICEDESC, 
+		                                  0, controller_desc, &desc_size, 0);
 
 		device_interface_data.cbSize = sizeof(device_interface_data);
 		if (!SetupDiEnumDeviceInterfaces(device_info, 0,
@@ -330,14 +335,21 @@ static void get_usb_details(struct sp_port *port, DEVINST dev_inst_match)
 			continue;
 		}
 
-		while (CM_Get_Parent(&dev_inst, dev_inst, 0) == CR_SUCCESS
-		       && dev_inst != device_info_data.DevInst) { }
-		if (dev_inst != device_info_data.DevInst) {
-			free(device_detail_data);
-			continue;
-		}
+		USHORT saved_vid = port->usb_vid;
+		USHORT saved_pid = port->usb_pid;
+		UCHAR saved_address = port->usb_address;
+		ULONG saved_bus = port->usb_bus;
+		char *saved_manufacturer = port->usb_manufacturer;
+		char *saved_product = port->usb_product;
+		char *saved_serial = port->usb_serial;
 
 		port->usb_bus = i + 1;
+		port->usb_vid = 0;
+		port->usb_pid = 0;
+		port->usb_address = 0;
+		port->usb_manufacturer = NULL;
+		port->usb_product = NULL;
+		port->usb_serial = NULL;
 
 		host_controller_device = CreateFile(device_detail_data->DevicePath,
 		                                    GENERIC_WRITE, FILE_SHARE_WRITE,
@@ -346,6 +358,22 @@ static void get_usb_details(struct sp_port *port, DEVINST dev_inst_match)
 			enumerate_host_controller(port, host_controller_device, dev_inst_match);
 			CloseHandle(host_controller_device);
 		}
+
+		if (port->usb_vid != 0 && port->usb_pid != 0) {
+			device_found = TRUE;
+			if (saved_manufacturer) free(saved_manufacturer);
+			if (saved_product) free(saved_product);
+			if (saved_serial) free(saved_serial);
+		} else {
+			port->usb_vid = saved_vid;
+			port->usb_pid = saved_pid;
+			port->usb_address = saved_address;
+			port->usb_bus = saved_bus;
+			port->usb_manufacturer = saved_manufacturer;
+			port->usb_product = saved_product;
+			port->usb_serial = saved_serial;
+		}
+
 		free(device_detail_data);
 	}
 
